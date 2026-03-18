@@ -57,15 +57,26 @@ set OPENAI_API_KEY=sk-...
 
 > ⚠️ **Never hardcode API keys in notebooks.** The `os.getenv("OPENAI_API_KEY")` call in each notebook picks up the environment variable automatically.
 
-### 4. Update BASE_DIR
+### 4. Update data paths
 
-In the config cell of each GPT-4.1 notebook (Methods 1–3), update `BASE_DIR` to point to your local data directory:
+The notebooks contain hardcoded absolute paths set to the original development environment. Before running, update these to point to your local `data/` directory:
+
+- **BERT:** Uses relative paths — place `stress_test_eval_set.csv` in the same directory as the notebook before running.
+
+- **Methods 1–3:** In the config cell near the top of each notebook, update `BASE_DIR`:
 
 ```python
 BASE_DIR = "/your/local/path/to/data"
 ```
 
-In Method 4, update both `FEW_SHOT_CSV` and `TEST_CSV` at the top of the single code cell.
+- **Method 4:** Update `FEW_SHOT_CSV` and `TEST_CSV` directly at the top of the single code cell:
+
+```python
+FEW_SHOT_CSV = "/your/local/path/to/data/few_shot_pool_fixed_3.csv"
+TEST_CSV     = "/your/local/path/to/data/stress_test_eval_set.csv"
+```
+
+> **Note:** File paths are hardcoded rather than relative because the notebooks were developed and executed in Google Colab, where relative paths are unreliable across sessions and mount points. All other configuration (model names, thresholds, concurrency) is parameterised in the same config cell.
 
 ---
 
@@ -101,7 +112,7 @@ This script:
 - Saves `stress_test_eval_set.csv` and `few_shot_pool_fixed_3.csv`
 - Generates EDA visualisations of class distribution
 
-> **Note:** The BERT notebook uses the same 8,000-row `stress_test_eval_set.csv` as all other models, ensuring a consistent apples-to-apples comparison across BERT and GPT-4.1 pipelines.
+> **Note:** The BERT notebook uses `stress_test_eval_set.csv` as its evaluation set, consistent with Methods 1–4.
 
 ---
 
@@ -116,12 +127,12 @@ All notebooks are self-contained and designed for Google Colab or a local Jupyte
 **Required files:** `stress_test_eval_set.csv`
 
 Run all cells in order. The notebook will:
-1. Load the 8,000-row stress-test evaluation set
-2. Run inference with `google-bert/bert-base-cased` (randomly initialised 6-label head, `num_labels=6`, threshold=0.5) — uninstructed lower-bound baseline
+1. Load `stress_test_eval_set.csv`
+2. Run inference with `google-bert/bert-base-cased` (randomly initialised 6-label classification head, `num_labels=6`, sigmoid activation, threshold=0.5) — uninstructed lower-bound baseline
 3. Run inference with `unitary/toxic-bert` (domain-adapted model fine-tuned on Jigsaw, threshold=0.5) — supervised upper-bound baseline
-4. Output per-label Precision, Recall, F1, and Accuracy reports for both models on the stress-test benchmark
+4. Output per-label Precision, Recall, F1, and Accuracy reports for both models
 
-> **Note:** `bert-base-cased` was chosen over `bert-base-uncased` because case sensitivity matters for toxicity detection — users frequently capitalise in toxic comments. `unitary/toxic-bert` is the state-of-the-art BERT model fine-tuned directly on the Jigsaw dataset.
+Both models use the Hugging Face `pipeline` with `function_to_apply="sigmoid"` and truncation at 512 tokens.
 
 ---
 
@@ -134,7 +145,7 @@ Run all cells in order. The notebook will:
 Run all cells in order. The notebook will:
 1. Load the evaluation set
 2. Run async GPT-4.1 inference (`ASYNC_CONCURRENCY=8`, `temperature=0`, `seed=42`)
-3. Apply per-label confidence thresholds on a 0–100 scale to produce binary predictions
+3. Rescale binary 0/1 model outputs to 0/100 and apply per-label thresholds to produce final binary predictions
 4. Save predictions with confidence scores, token counts, and per-row runtime
 5. Print a full evaluation report: per-label F1, ROC-AUC, Hamming Loss, and cost breakdown
 
@@ -163,7 +174,7 @@ Run all cells in order. The notebook will:
 Run all cells in order. The notebook will:
 1. Load the evaluation set and few-shot pool
 2. Embed the full pool using `text-embedding-3-small` — **cached to `pool_embeddings.npz` after first run**; subsequent runs load from cache automatically
-3. For each test comment, retrieve the top-7 most semantically similar pool examples via cosine similarity (similarity floor: 0.10)
+3. For each test comment, retrieve the top-7 most semantically similar pool examples via cosine similarity (similarity floor: 0.10), with at least 3 slots reserved for hard-minority-label positives (`severe_toxic`, `threat`, `identity_hate`)
 4. Run async GPT-4.1 inference with dynamically retrieved examples per comment
 5. Save predictions and print full evaluation report including embedding cost breakdown
 
@@ -204,12 +215,14 @@ evaluate_predictions("test")
 ```
 
 Key features of Method 4:
-- Per-label threshold tuning on dev set (recall floors: `severe_toxic` and `threat` ≥ 0.50; `identity_hate` ≥ 0.60)
-- Dedicated severity check pass for borderline `severe_toxic` cases
-- Dedicated identity check pass for borderline `identity_hate` cases
-- Adaptive self-consistency voting for hard labels only (`severe_toxic`, `threat`, `identity_hate`)
-- Skip-gate for high-confidence clean comments (~8–12% bypass GPT calls, reducing cost)
+- 4-point severity rubric with dedicated second-pass severity check for borderline `severe_toxic` cases
+- Threat credibility filter with boundary contrast examples (IS / IS NOT a threat) distinguishing rhetorical anger from actionable language
+- Group-noun detection heuristic with dedicated second-pass identity check for borderline `identity_hate` cases
+- Skip-gate for high-confidence clean comments (bypassed 69 of 4,001 test comments, ~1.7%, saving approximately $0.13)
 - Post-processing heuristic rules enforcing label hierarchy consistency
+- Adaptive self-consistency voting for hard labels only (`severe_toxic`, `threat`, `identity_hate`)
+- Boundary contrast examples embedded in the main prompt for all three hard labels
+- Per-label threshold tuning on dev set (recall floors: `severe_toxic` and `threat` ≥ 0.50; `identity_hate` ≥ 0.60)
 
 ---
 
@@ -218,7 +231,7 @@ Key features of Method 4:
 | File | Generated by | Description |
 |------|-------------|-------------|
 | `stress_test_eval_set.csv` | `stress_test_sampling.py` | Main evaluation set (~8k rows, 50/50 split) |
-| `few_shot_pool_fixed_3.csv` | `stress_test_sampling.py` | Leak-free few-shot retrieval pool (151,571 comments) |
+| `few_shot_pool_fixed_3.csv` | `stress_test_sampling.py` | Leak-free few-shot retrieval pool (151,543 comments) |
 | `predictions_zero_shot.csv` | Method 1 | Zero-shot predictions + confidence scores |
 | `predictions_few_shot41.csv` | Method 2 | Few-shot predictions + confidence scores |
 | `predictions_rag_dynamic.csv` | Method 3 | RAG dynamic predictions + scores |
@@ -259,7 +272,7 @@ Key features of Method 4:
 | `scikit-learn` | Evaluation metrics (F1, ROC-AUC, Hamming Loss, Jaccard) |
 | `pandas` | Data loading and prediction storage |
 | `numpy` | Embedding matrix operations and score aggregation |
-| `seaborn` / `matplotlib` | Class distribution visualisation (BERT notebook) |
+| `seaborn` / `matplotlib` | Imported in BERT notebook (available for exploratory plots) |
 
 ---
 
@@ -267,9 +280,9 @@ Key features of Method 4:
 
 **API keys:** Never commit API keys to the repository. All notebooks use `os.getenv("OPENAI_API_KEY")` — set the key as an environment variable only.
 
-**Cost:** Running all four GPT-4.1 pipelines on the full evaluation set incurs API costs. Method 4 is the most expensive due to multi-pass inference (severity check, identity check, and self-consistency passes for borderline cases). The skip-gate in Method 4 reduces cost by bypassing GPT for high-confidence clean comments.
+**Cost:** Running all four GPT-4.1 pipelines on the full evaluation set incurs API costs. Method 2 is the most expensive ($24.09) because every prompt carries the full 41-example block (~28.6M input tokens total). Method 4 ($7.82) costs less than Method 3 ($11.59) because dynamically retrieved prompts are shorter than the static 41-example block, despite multi-pass inference for borderline cases.
 
-**Runtime:** Methods 1–3 take approximately 30–60 minutes on the full evaluation set at `ASYNC_CONCURRENCY=8` on a paid OpenAI tier. Method 4 is longer due to `build_index()` (run once) and multi-pass inference.
+**Runtime:** Methods 1–3 complete in approximately 18–22 minutes on the full evaluation set at `ASYNC_CONCURRENCY=8` on a paid OpenAI tier (M1: ~20 min, M2: ~18 min, M3: ~22 min). Method 4 takes approximately 44 minutes due to `build_index()` (run once) and multi-pass inference for borderline cases.
 
 **Evaluation set design:** The stress-test evaluation set deliberately over-represents rare classes relative to the natural Jigsaw distribution. Macro-F1 scores are not directly comparable to published Jigsaw leaderboard results.
 
