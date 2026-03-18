@@ -1,4 +1,4 @@
-# Toxic Comment Classification using LLM Prompt Engineering
+# Toxic Comment Classification using LLM Prompt Engineering - GROUP 4
 
 Multi-label toxic comment classification on the [Jigsaw Toxic Comment Classification dataset](https://www.kaggle.com/competitions/jigsaw-toxic-comment-classification-challenge/data) using GPT-4.1 prompt engineering pipelines and BERT-based baselines. Six toxicity labels are classified: `toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`.
 
